@@ -23,7 +23,7 @@ import threading
 
 # 实测可达的 GitHub 边缘 IP（2026-10）
 UPSTREAM = {
-    "github.com": "140.82.112.3",
+    "github.com": "140.82.113.3",
     "api.github.com": "140.82.112.6",
     "codeload.github.com": "140.82.112.9",
     "uploads.github.com": "140.82.112.6",

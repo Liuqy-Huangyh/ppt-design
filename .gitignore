@@ -5,7 +5,15 @@ __pycache__/
 *.pyc
 
 # 运行产物
-out/
+out/*
+!out/visual-v2/
+out/visual-v2/*
+!out/visual-v2/README.md
+!out/visual-v2/*.png
+!out/visual-v2/warm/
+out/visual-v2/warm/*
+!out/visual-v2/warm/README.md
+!out/visual-v2/warm/*.png
 .tmp/
 .tmp2/
 server/store/
