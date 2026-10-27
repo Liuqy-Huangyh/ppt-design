@@ -318,10 +318,13 @@ def create_profile(store: Store, data: bytes, filename: str) -> dict:
 
 def get_profile(store: Store, profile_id: str) -> dict:
     path = store.profile_path(profile_id)
+    # 先判存在再取锁：对不存在的 id 探测不留下永久锁（避免锁表随探测无限增长）。
+    if not path.is_file():
+        raise ApiError(404, "profile_not_found", f"找不到档案：{profile_id}")
     # 与 add_feedback 共用同一把 per-profile RLock（RLock 可重入）：
     # 反馈的「读→改→原子写」进行中时，生成/详情接口不会读到中间态（评审 F11）。
     with store.profile_lock(str(profile_id)):
-        if not path.is_file():
+        if not path.is_file():      # 锁内复查：并发删除时仍返回 404 而不是 500
             raise ApiError(404, "profile_not_found", f"找不到档案：{profile_id}")
         try:
             profile = kitlink.load_profile(store.root, profile_id)

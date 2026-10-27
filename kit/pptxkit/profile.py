@@ -59,6 +59,7 @@ DEFAULT_STYLE = {"density": 1.0, "title_scale": 1.0, "bullet_char": "▪"}
 
 DENSITY_RANGE = (0.6, 1.4)
 TITLE_SCALE_RANGE = (0.85, 1.25)
+HISTORY_LIMIT = 200          # learn.history 只保留最近 N 条，rounds 继续累加
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _HEX_RE = re.compile(r"^[0-9A-Fa-f]{6}$")
@@ -755,7 +756,7 @@ def save(profile: dict, store_dir: str | Path) -> dict:
     learn_obj = pf.get("learn") if isinstance(pf.get("learn"), dict) else {}
     pf["learn"] = {
         "rounds": int(learn_obj.get("rounds") or 0),
-        "history": list(learn_obj.get("history") or []),
+        "history": list(learn_obj.get("history") or [])[-HISTORY_LIMIT:],
     }
 
     source_file = profile.get("_source_path")
@@ -929,4 +930,7 @@ def learn(profile: dict, rating: int, notes: str = "") -> dict:
         "title_scale": title_scale,
         "notes": str(notes or ""),
     })
+    if len(history) > HISTORY_LIMIT:
+        # 只保留最近 HISTORY_LIMIT 条；rounds 是累计计数，不清零。
+        del history[:-HISTORY_LIMIT]
     return profile

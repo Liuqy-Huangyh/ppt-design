@@ -89,6 +89,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - http.server 命名约定
         self._dispatch("GET")
 
+    def do_HEAD(self):  # noqa: N802 - 与 GET 一致，但只回响应头
+        self._dispatch("GET")
+
     def do_POST(self):  # noqa: N802
         self._dispatch("POST")
 

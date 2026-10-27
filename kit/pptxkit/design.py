@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 from pptx.dml.color import RGBColor
@@ -112,19 +113,37 @@ class Palette:
         return self.reverse if contrast(self.reverse, self.accent) >= 3.2 else self.ink
 
 
-def palette(accent: str = "#1B3A6B", *, mode: str = "paper") -> Palette:
+# 暖纸（warm paper）：不跟随强调色色相，固定在暖米色，保住杂志/分享类主题的纸感。
+# 参数落在 OKLCH 的暖白区间：L≈0.975、C 0.008–0.012、H 70–85°（结果 #FAF6EF，
+# 与旧版暖米色 #F7F3EA 的 RGB 差 ≤5）。
+PAPER_WARM_HUE = 80.0
+PAPER_WARM_L = 0.975
+PAPER_WARM_C = 0.010
+PAPER_WARM_RULE_L = 0.890
+PAPER_WARM_RULE_C = 0.012
+
+
+def palette(accent: str = "#1B3A6B", *, mode: str = "paper",
+            warm_paper: bool = False) -> Palette:
     """从一个强调色推导整套配色。
 
     mode:
-        paper  米白纸感（偏暖，适合分享/杂志）
+        paper  米白纸感（适合分享/杂志）
         clean  纯白（适合商务/学术）
+    warm_paper:
+        paper 模式下改为固定暖米色纸底（H≈80°、L≈0.975），默认关闭；
+        clean 模式忽略此参数。强调色、正文色仍按强调色色相推导。
     """
     l, c, h = to_oklch(accent)
     hue = h
     chroma = min(c, 0.16)
     if mode == "paper":
-        bg = oklch(0.978, 0.006, hue + 40)
-        rule = oklch(0.895, 0.008, hue)
+        if warm_paper:
+            bg = oklch(PAPER_WARM_L, PAPER_WARM_C, PAPER_WARM_HUE)
+            rule = oklch(PAPER_WARM_RULE_L, PAPER_WARM_RULE_C, PAPER_WARM_HUE)
+        else:
+            bg = oklch(0.978, 0.006, hue + 40)
+            rule = oklch(0.895, 0.008, hue)
         soft = oklch(0.945, 0.028, hue)
     else:
         bg = "#FFFFFF"
@@ -160,6 +179,78 @@ T_H2 = type_size(3)        # 35.2
 T_H1 = type_size(4)        # 44
 T_DISPLAY = type_size(5)   # 55
 
+# 装饰字号（不属于正文层级，但同样来自同一条阶梯，避免出现 210pt 这类魔数）
+T_DECOR = type_size(8)     # 107 — 引用页的引号
+T_GHOST = type_size(11)    # 210 — 章节页的背景大编号
+
 # 行距：正文 1.55，标题 1.18
 LEAD_BODY = 1.55
 LEAD_TITLE = 1.18
+
+
+# ---------------------------------------------------------------- 排版小工具
+
+def lines_height(pt: float, lines: int = 1, lead: float = LEAD_TITLE) -> float:
+    """n 行文字占的高度（英寸），用来把文本块落到网格行上。"""
+    return lines * pt * lead / 72.0
+
+
+def grid_box(col: int, span: int, row: float, height: float) -> tuple[float, float, float, float]:
+    """(x, y, w, h)：第 col 栏起、跨 span 栏，纵向从版心顶部下移 row 英寸。"""
+    return (col_x(col), row_y(row), col_w(span), height)
+
+
+# ---------------------------------------------------------------- 字宽测量
+# 引文这类「必须一行放得下」的文本，用真实字体量宽度，避免出现只剩两个字的孤行。
+# 字体没装时退回按字数估算，不影响出片。
+
+_FONT_CANDIDATES = {
+    "Noto Sans SC": ("NotoSansSC-Regular.otf", "NotoSansSC-VF.ttf",
+                     "Noto Sans SC (TrueType).otf"),
+    "Noto Serif SC": ("NotoSerifSC-Regular.otf", "NotoSerifSC-VF.ttf",
+                      "Noto Serif SC (TrueType).otf"),
+    "Inter": ("Inter-Regular.ttf", "Inter.ttf"),
+}
+_FONT_DIRS = (
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Windows", "Fonts"),
+    os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"),
+)
+_MEASURE_PX = 200
+_font_cache: dict[str, object] = {}
+
+
+def _font_file(name: str) -> str | None:
+    for folder in _FONT_DIRS:
+        for filename in _FONT_CANDIDATES.get(name, ()):
+            path = os.path.join(folder, filename)
+            if os.path.exists(path):
+                return path
+    return None
+
+
+def text_width(text: str, font_name: str, pt: float) -> float | None:
+    """真实字宽（英寸）。字体不可用时返回 None，由调用方退回估算。"""
+    try:
+        from PIL import ImageFont
+
+        if font_name not in _font_cache:
+            path = _font_file(font_name)
+            _font_cache[font_name] = ImageFont.truetype(path, _MEASURE_PX) if path else None
+        font = _font_cache[font_name]
+        if font is None:
+            return None
+        return float(font.getlength(str(text))) * (pt / _MEASURE_PX) / 72.0
+    except Exception:
+        return None
+
+
+def fits_one_line(text: str, font_name: str, pt: float, width_in: float,
+                  *, margin: float = 0.98) -> bool:
+    """这段文字在给定字号下能否一行放进 width_in（留 2% 余量）。"""
+    width = text_width(text, font_name, pt)
+    if width is None:
+        units = sum(1.0 if ord(ch) > 127 else 0.55 for ch in str(text))
+        width = units * pt / 72.0 * 1.02
+    return width <= width_in * margin
+
+

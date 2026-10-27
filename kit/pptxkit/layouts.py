@@ -1,4 +1,9 @@
-"""11 种版式。所有版式共用同一套网格，只换主题配色。"""
+"""11 种版式。所有版式共用同一套网格，只换主题配色。
+
+cover / section / stats / quote / timeline 五个版式直接引用 design.py 的
+12 栏网格（col_x / col_w / row_y）与 1.25 字号阶梯（T_H1 / T_H2 / T_BODY …）；
+其余版式保持原有实现，只共享 themes 的 MARGIN_X / CONTENT_W 常量。
+"""
 from __future__ import annotations
 
 import math
@@ -7,13 +12,28 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
 
+from . import design as D
 from .primitives import (add_para, bg, hline, notes, picture, pick_size, rect,
                          slide_number, table, textbox, vline, weighted_len)
-from .themes import (CONTENT_H, CONTENT_W, MARGIN_X, SLIDE_H, SLIDE_W,
-                     TITLE_TOP, Theme, rgb)
+from .themes import (CONTENT_W, MARGIN_X, SLIDE_H, SLIDE_W, TITLE_TOP, Theme,
+                     title_scale)
 
 CENTER = PP_ALIGN.CENTER
 RIGHT = PP_ALIGN.RIGHT
+
+# ---------------------------------------------------------------- 设计系统常量
+# 全部由 design.py 推导：纵向节奏 = 栏距，短线 = 一格栏宽，圆点约 0.43 栏距。
+GAP = D.COL_GUTTER                 # 0.28in：栏距，同时也是版式的纵向节奏
+HAIRLINE = D.col_w(1)              # 0.688in：一格栏宽的装饰短线
+RULE_L = D.col_w(1) * 1.5          # 1.03in：封面标题下的强调短线
+DOT = D.COL_GUTTER * 0.43          # 0.12in：时间线圆点（视觉上约 8.6pt）
+PANEL_COL = 8                      # editorial 封面右侧色块从第 8 栏起（留 8 栏给文字）
+
+
+def _title_pt(theme: Theme, step: int) -> float:
+    """阶梯字号 × 主题标题比例（风格档案的 title_scale 由此生效）。"""
+    return round(D.type_size(step) * title_scale(theme), 1)
+
 
 
 # ---------------------------------------------------------------- 公共零件
@@ -103,83 +123,102 @@ def _two_columns(slide, theme: Theme, data: dict, top: float, *, divider=True,
 # ---------------------------------------------------------------- 版式
 
 def cover(slide, theme: Theme, data: dict):
+    """封面：文字按 12 栏排（editorial 让出右侧第 8–12 栏给色块），行位置走网格行。"""
     title = data.get("title", "")
     subtitle = data.get("subtitle", "")
     kicker = data.get("kicker", "")
     meta = data.get("meta") or {}
     meta_lines = [meta.get(k) for k in ("author", "org", "date") if meta.get(k)]
 
+    # 文字栏：editorial 给右侧色块留出第 8–12 栏；其余主题用满 12 栏
+    text_span = PANEL_COL if theme.key == "editorial" else D.COLS
+    text_w = D.col_w(text_span)
+
+    # 主题装饰（都是网格对齐的几何元素，不抢标题）
     if theme.key == "editorial":
-        # 右上角线框圆 + 顶部细线，杂志感
-        rect(slide, (9.55, -1.85, 4.5, 4.5), fill=None, line=theme.accent, line_w=1.0,
-             shape=MSO_SHAPE.OVAL)
-        hline(slide, MARGIN_X, 1.30, CONTENT_W, theme.rule, 0.75)
-        top = 1.95
+        panel_x = D.col_x(PANEL_COL)
+        rect(slide, (panel_x, 0, D.SLIDE_W - panel_x, SLIDE_H), fill=theme.accent_soft)
+        vline(slide, panel_x, 0, SLIDE_H, theme.accent, 2.0)
     elif theme.key == "academic":
         vline(slide, 0, 0, SLIDE_H, theme.accent, 3.0)
-        top = 2.20
     else:
-        hline(slide, MARGIN_X, 1.85, CONTENT_W, theme.rule, 0.75)
-        top = 2.30
+        hline(slide, D.col_x(0), D.row_y(0.45), D.content_w(), theme.rule, 0.75)
 
     if kicker:
-        tf = textbox(slide, (MARGIN_X, top - 0.52, CONTENT_W, 0.3))
-        add_para(tf, theme, kicker, first=True, size=theme.kicker_size + 1,
+        tf = textbox(slide, (D.col_x(0), D.row_y(0.90), text_w,
+                             D.lines_height(D.T_CAPTION, 1, D.LEAD_BODY)))
+        add_para(tf, theme, kicker, first=True, size=D.T_CAPTION,
                  color=theme.accent, bold=True, spacing=2.2)
 
     length = weighted_len(title)
-    size = 44 if length <= 24 else (38 if length <= 32 else 33)
-    per_line = max(1.0, (CONTENT_W - 0.35) * 72 / (size * 1.02))
+    size = _title_pt(theme, 4) if length <= 24 else _title_pt(theme, 3)
+    per_line = max(1.0, text_w * 72 / (size * 1.02))
     lines = max(1, math.ceil(length / per_line))
-    title_h = lines * size * 1.16 / 72
-    tf = textbox(slide, (MARGIN_X, top, CONTENT_W - 0.3, title_h + 0.1))
+    title_h = D.lines_height(size, lines, D.LEAD_TITLE)
+    tf = textbox(slide, (D.col_x(0), D.row_y(1.30), text_w, title_h + GAP))
     add_para(tf, theme, title, first=True, size=size, bold=True, color=theme.ink,
-             name=theme.font_title, line=1.16)
+             name=theme.font_title, line=D.LEAD_TITLE)
 
-    rule_y = top + title_h + 0.26
-    hline(slide, MARGIN_X, rule_y, 1.05, theme.accent, 2.6)
+    # 标题区按「至少两行」预留高度：短标题也有足够的呼吸，长标题自然向下长
+    block_h = D.lines_height(size, max(2, lines), D.LEAD_TITLE)
+    rule_y = D.row_y(1.30) + block_h + GAP
+    hline(slide, D.col_x(0), rule_y, RULE_L, theme.accent, 2.6)
     if subtitle:
-        tf = textbox(slide, (MARGIN_X, rule_y + 0.30, 9.6, 0.9))
-        add_para(tf, theme, subtitle, first=True, size=18, color=theme.muted, line=1.4)
+        tf = textbox(slide, (D.col_x(0), rule_y + GAP, D.col_w(6),
+                             D.lines_height(D.T_BODY, 2, D.LEAD_BODY)))
+        add_para(tf, theme, subtitle, first=True, size=D.T_BODY, color=theme.muted,
+                 line=D.LEAD_BODY)
 
     if meta_lines:
-        tf = textbox(slide, (MARGIN_X, 5.95, 9.0, 0.9))
+        tf = textbox(slide, (D.col_x(0), D.row_y(5.1), D.col_w(6),
+                             D.lines_height(D.T_SMALL, 3, 1.4)))
         for i, line in enumerate(meta_lines):
-            add_para(tf, theme, line, first=(i == 0), size=12.5,
+            add_para(tf, theme, line, first=(i == 0), size=D.T_SMALL,
                      color=theme.muted if i else theme.ink,
                      bold=(i == 0), line=1.4, space_before=0 if i == 0 else 2)
 
 
 def section(slide, theme: Theme, data: dict):
+    """章节页：背景大编号右对齐到版心右缘，左侧 3pt 竖条 + PART 标签 + 标题。"""
     number = str(data.get("number") or data.get("kicker") or "").strip()
     title = data.get("title", "")
     subtitle = data.get("subtitle", "")
 
-    # 背景大数字，做层次（浅一档的颜色，不抢标题）
+    # 背景大编号：右对齐到版心右缘（文本框给足宽度，绝不折行）
     if number:
-        color = theme.accent_soft if theme.key == "editorial" else theme.rule
-        if theme.key == "editorial":
-            x, y, size = 8.30, 0.25, 235
-        elif theme.key == "academic":
-            x, y, size = 8.80, 0.45, 210
-        else:
-            x, y, size = 9.05, 0.70, 180
-        tf = textbox(slide, (x, y, 4.4, 3.4))
-        add_para(tf, theme, number, first=True, size=size,
-                 bold=(theme.key != "academic"), color=color,
-                 name=theme.font_display, line=0.95)
+        ghost_span = 8 if len(number) <= 2 else 10
+        ghost_color = theme.accent_soft if theme.key == "editorial" else theme.rule
+        tf = textbox(slide, (D.col_x(D.COLS - ghost_span), D.row_y(-0.55),
+                             D.col_w(ghost_span), D.lines_height(D.T_GHOST, 1, 0.95)))
+        add_para(tf, theme, number, first=True, size=D.T_GHOST,
+                 bold=(theme.key != "academic"), color=ghost_color,
+                 name=theme.font_display, line=0.95, align=RIGHT)
 
-    vline(slide, MARGIN_X, 2.02, 2.32, theme.accent, 3.0)
+    # 左侧竖条：从 PART 标签上缘到副标题下缘，用网格行定位
+    bar_top = D.row_y(1.15)
+    vline(slide, D.col_x(0), bar_top, D.row_y(3.40) - bar_top, theme.accent, 3.0)
+    text_x = D.col_x(0) + GAP
     if number:
-        tf = textbox(slide, (MARGIN_X + 0.32, 1.99, 6.4, 0.42))
+        tf = textbox(slide, (text_x, D.row_y(1.14), D.col_w(6),
+                             D.lines_height(D.T_CAPTION, 1, 1.2)))
         add_para(tf, theme, f"PART {number}" if number.isdigit() else number,
-                 first=True, size=11, color=theme.accent, bold=True, spacing=2.2)
-    tf = textbox(slide, (MARGIN_X + 0.32, 2.46, 7.5, 1.5))
-    add_para(tf, theme, title, first=True, size=38, bold=True, color=theme.ink,
+                 first=True, size=D.T_CAPTION, color=theme.accent, bold=True, spacing=2.2)
+
+    size = _title_pt(theme, 3)
+    title_x, title_y = text_x, D.row_y(1.60)
+    title_w = D.col_w(8)
+    per_line = max(1.0, title_w * 72 / (size * 1.02))
+    title_h = D.lines_height(size, max(1, math.ceil(weighted_len(title) / per_line)), 1.2)
+    tf = textbox(slide, (title_x, title_y, title_w, title_h + GAP))
+    add_para(tf, theme, title, first=True, size=size, bold=True, color=theme.ink,
              name=theme.font_title, line=1.2)
+
     if subtitle:
-        tf = textbox(slide, (MARGIN_X + 0.32, 4.35, 8.2, 0.8))
-        add_para(tf, theme, subtitle, first=True, size=15, color=theme.muted, line=1.5)
+        sub_y = max(D.row_y(3.50), title_y + title_h + GAP * 1.5)
+        tf = textbox(slide, (text_x, sub_y, D.col_w(8),
+                             D.lines_height(D.T_BODY, 2, D.LEAD_BODY)))
+        add_para(tf, theme, subtitle, first=True, size=D.T_BODY, color=theme.muted,
+                 line=D.LEAD_BODY)
 
 
 def bullets(slide, theme: Theme, data: dict):
@@ -234,75 +273,114 @@ def image(slide, theme: Theme, data: dict):
 
 
 def quote(slide, theme: Theme, data: dict):
+    """引用页：装饰引号 + 引文 + 出处，全部落在 12 栏网格与字号阶梯上。"""
     spec = data.get("quote") or {}
     text = spec.get("text") or data.get("title", "")
     cite = spec.get("cite", "")
 
-    tf = textbox(slide, (MARGIN_X - 0.06, 1.28, 2.0, 1.5))
-    add_para(tf, theme, "“", first=True, size=110, bold=True, color=theme.accent_soft,
-             name=theme.font_display, line=0.9)
+    tf = textbox(slide, (D.col_x(0), D.row_y(0.40), D.col_w(2),
+                         D.lines_height(D.T_DECOR, 1, 0.9)))
+    add_para(tf, theme, "“", first=True, size=D.T_DECOR, bold=True,
+             color=theme.accent_soft, name=theme.font_display, line=0.9)
 
-    size = 30 if weighted_len(text) <= 60 else 26
-    tf = textbox(slide, (MARGIN_X + 0.12, 2.42, CONTENT_W - 0.6, 2.9))
+    # 引文：在 T_H4–T_H2 里挑「一行放得下」的最大字号（用真实字宽量，避免孤行）
+    body_x, body_w = D.col_x(0), D.col_w(12)
+    quote_font = theme.font_title if theme.key == "editorial" else theme.font_body
+    size = _title_pt(theme, 1)
+    for step in (3, 2):
+        cand = _title_pt(theme, step)
+        if D.fits_one_line(text, quote_font, cand, body_w):
+            size = cand
+            break
+    body_y = D.row_y(1.60)
+    tf = textbox(slide, (body_x, body_y, body_w, D.row_y(4.45) - body_y))
     add_para(tf, theme, text, first=True, size=size, color=theme.ink,
              name=theme.font_title if theme.key == "editorial" else None,
-             line=1.55, bold=(theme.key == "editorial"))
+             line=D.LEAD_BODY, bold=(theme.key == "editorial"))
     if cite:
-        hline(slide, MARGIN_X + 0.12, 5.52, 0.72, theme.accent, 2.0)
-        tf = textbox(slide, (MARGIN_X + 0.12, 5.68, CONTENT_W - 1.0, 0.5))
-        add_para(tf, theme, cite, first=True, size=13, color=theme.muted, line=1.2)
+        hline(slide, body_x, D.row_y(4.70), HAIRLINE, theme.accent, 2.0)
+        tf = textbox(slide, (body_x, D.row_y(4.86), D.col_w(8),
+                             D.lines_height(D.T_SMALL, 1, 1.2)))
+        add_para(tf, theme, cite, first=True, size=D.T_SMALL, color=theme.muted, line=1.2)
 
 
 def stats(slide, theme: Theme, data: dict):
+    """数据卡：每个数字占 12/n 栏，栏宽由 col_w 决定，字号走 T_DISPLAY→T_H2。"""
     top = _title(slide, theme, data)
     items = data.get("stats") or []
     if not items:
         return
     n = len(items)
-    gap = 0.55
-    w = (CONTENT_W - gap * (n - 1)) / n
-    y = top + 0.30
+    span = max(2, D.COLS // n)
+    y = top + GAP
     for i, item in enumerate(items):
-        x = MARGIN_X + i * (w + gap)
-        hline(slide, x, y, 0.66, theme.accent, 2.6)
+        x = D.col_x(i * span)
+        w = D.col_w(span)
+        hline(slide, x, y, HAIRLINE, theme.accent, 2.2)
+
         value = str(item.get("value", ""))
-        vsize = 54 if weighted_len(value) <= 4 else (42 if weighted_len(value) <= 7 else 34)
-        tf = textbox(slide, (x, y + 0.30, w, vsize / 72 * 1.4))
+        vlen = weighted_len(value)
+        vsize = D.T_DISPLAY if vlen <= 4 else (D.T_H1 if vlen <= 7 else D.T_H2)
+        vh = D.lines_height(vsize, 1, 1.05)
+        tf = textbox(slide, (x, y + GAP, w, vh + GAP))
         add_para(tf, theme, value, first=True, size=vsize, bold=True,
                  color=theme.accent, name=theme.font_display, line=1.05)
-        tf = textbox(slide, (x, y + 0.30 + vsize / 72 * 1.35 + 0.10, w, 0.9))
-        add_para(tf, theme, str(item.get("label", "")), first=True, size=14,
-                 color=theme.ink, line=1.45)
+
+        label_y = y + GAP + vh + GAP
+        label_h = D.lines_height(D.T_H4, 1, 1.3)
+        tf = textbox(slide, (x, label_y, w, label_h))
+        add_para(tf, theme, str(item.get("label", "")), first=True, size=D.T_H4,
+                 color=theme.ink, line=1.3)
+
         if item.get("note"):
-            tf = textbox(slide, (x, y + 0.30 + vsize / 72 * 1.35 + 0.62, w, 0.9))
-            add_para(tf, theme, str(item["note"]), first=True, size=11,
-                     color=theme.muted, line=1.5)
+            tf = textbox(slide, (x, label_y + label_h + GAP / 2, w,
+                                 D.lines_height(D.T_SMALL, 3, 1.45)))
+            add_para(tf, theme, str(item["note"]), first=True, size=D.T_SMALL,
+                     color=theme.muted, line=1.45)
+
+
+def _timeline_desc(desc) -> str:
+    """时间线说明：Markdown 里 `月份 | 阶段 | 说明` 三段写法只取到前两段，
+    剩下以 "|" 开头的部分用冒号接上，避免把分隔符画到页面上。"""
+    parts = [p.strip() for p in str(desc or "").split("|") if p.strip()]
+    if not parts:
+        return ""
+    return parts[0] + ("：" + "，".join(parts[1:]) if len(parts) > 1 else "")
 
 
 def timeline(slide, theme: Theme, data: dict):
+    """时间线：每个阶段占 12/n 栏，圆点、序号、名称、说明都贴着网格行。"""
     top = _title(slide, theme, data)
     steps = data.get("steps") or []
     if not steps:
         return
     n = len(steps)
-    gap = 0.34
-    w = (CONTENT_W - gap * (n - 1)) / n
-    line_y = top + 1.05
-    hline(slide, MARGIN_X, line_y, CONTENT_W, theme.rule, 1.0)
+    span = max(2, D.COLS // n)
+    line_y = max(D.row_y(2.05), top + GAP * 3)     # 标题换行时整条线一起下移
+    hline(slide, D.col_x(0), line_y, D.content_w(), theme.rule, 1.0)
     for i, step in enumerate(steps):
-        x = MARGIN_X + i * (w + gap)
-        rect(slide, (x, line_y - 0.075, 0.15, 0.15), fill=theme.accent,
+        x = D.col_x(i * span)
+        w = D.col_w(span)
+        rect(slide, (x, line_y - DOT / 2, DOT, DOT), fill=theme.accent,
              shape=MSO_SHAPE.OVAL)
-        tf = textbox(slide, (x, line_y + 0.24, w - 0.10, 0.36))
-        add_para(tf, theme, f"0{i + 1}", first=True, size=11, bold=True,
+
+        num_y = line_y + GAP
+        num_h = D.lines_height(D.T_CAPTION, 1, 1.2)
+        tf = textbox(slide, (x, num_y, w, num_h))
+        add_para(tf, theme, f"0{i + 1}", first=True, size=D.T_CAPTION, bold=True,
                  color=theme.accent, spacing=1.2)
-        tf = textbox(slide, (x, line_y + 0.58, w - 0.10, 0.9))
-        add_para(tf, theme, str(step.get("name", "")), first=True, size=16,
+
+        name_y = num_y + num_h + GAP / 2
+        name_h = D.lines_height(D.T_H4, 1, 1.3)
+        tf = textbox(slide, (x, name_y, w, name_h))
+        add_para(tf, theme, str(step.get("name", "")), first=True, size=D.T_H4,
                  bold=True, color=theme.ink, line=1.3)
+
         if step.get("desc"):
-            tf = textbox(slide, (x, line_y + 1.32, w - 0.10, 1.6))
-            add_para(tf, theme, str(step["desc"]), first=True, size=11.5,
-                     color=theme.muted, line=1.45)
+            tf = textbox(slide, (x, name_y + name_h + GAP / 2, w - GAP / 2,
+                                 D.lines_height(D.T_SMALL, 3, 1.45)))
+            add_para(tf, theme, _timeline_desc(step["desc"]), first=True,
+                     size=D.T_SMALL, color=theme.muted, line=1.45)
 
 
 def refs(slide, theme: Theme, data: dict):

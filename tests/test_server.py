@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import contextlib
 import http.client
+import io
 import json
 import os
 import re
@@ -59,6 +61,63 @@ def make_sample_pptx(path: Path) -> Path:
         for run in slide.shapes.title.text_frame.paragraphs[0].runs:
             run.font.size = Pt(31)
 
+    prs.save(str(path))
+    return path
+
+
+def build_review_deck(path: Path, kind: str) -> Path:
+    """构造用于 visual 评审闸门的坏/好样例（不依赖 WPS，纯 python-pptx）。"""
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    def slide():
+        return prs.slides.add_slide(prs.slide_layouts[6])
+
+    def text(slide_obj, left, top, width, height, content, size):
+        box = slide_obj.shapes.add_textbox(Inches(left), Inches(top),
+                                           Inches(width), Inches(height))
+        box.text_frame.word_wrap = True
+        box.text_frame.text = content
+        for paragraph in box.text_frame.paragraphs:
+            for run in paragraph.runs:
+                run.font.size = Pt(size)
+        return box
+
+    if kind == "overflow":
+        text(slide(), 1, 1, 2.0, 0.3,
+             "这是一段明显超过文本框高度的正文，用来触发文字溢出闸门。" * 3, 20)
+    elif kind == "out-of-bounds":
+        text(slide(), 12.6, 2, 2.0, 0.8, "越界文本", 20)
+    elif kind == "overlap":
+        current = slide()
+        text(current, 2.0, 2, 4, 1, "重叠的两个内容块", 20)
+        text(current, 2.6, 2, 4, 1, "重叠的两个内容块", 20)
+    elif kind == "small-font":
+        text(slide(), 2, 2.5, 8, 1.2,
+             "这是一段正文，字号只有十磅，明显低于十四磅的下限，阅读起来会比较吃力。" * 2, 10)
+    elif kind == "blank":
+        text(slide(), 1, 1, 1.2, 0.4, "空白", 16)
+    elif kind == "stretch":
+        from PIL import Image
+
+        image_path = path.with_name("square.png")
+        Image.new("RGB", (200, 200), (200, 60, 60)).save(image_path)
+        slide().shapes.add_picture(str(image_path), Inches(1), Inches(1),
+                                   Inches(5), Inches(1))
+    elif kind == "good":
+        current = slide()
+        text(current, 1, 1.2, 8, 1, "季度复盘", 32)
+        text(current, 1, 2.6, 10, 2,
+             "本季度完成率 92%，平均交付周期 6.5 天，下一步聚焦三个关键动作。", 20)
+    elif kind == "render":
+        text(slide(), 1, 1, 1.2, 0.4, "空白", 16)
+        current = slide()
+        text(current, 1, 1.2, 8, 1, "季度复盘", 32)
+        text(current, 1, 2.6, 10, 2,
+             "本季度完成率 92%，平均交付周期 6.5 天，下一步聚焦三个关键动作。", 20)
+    else:
+        raise ValueError(f"未知样例类型：{kind}")
     prs.save(str(path))
     return path
 
@@ -742,6 +801,152 @@ class ServerTestCase(unittest.TestCase):
         self.assertIn("style", profile)
         self.assertGreaterEqual(profile["learn"]["rounds"], 1)
         self.assertTrue((self.store_dir / "profiles" / f"{self.profile_id}.json").is_file())
+
+    def test_27_missing_profiles_do_not_leak_locks(self):
+        """锁表残留：探测不存在的档案 id 不应创建 per-profile 锁。"""
+        store = self.httpd.store
+        before = set(store._profile_locks)
+        missing = [f"pf-20261027-{uuid.uuid4().hex[:8]}" for _ in range(120)]
+
+        def probe(profile_id):
+            return self.request("GET", f"/api/profiles/{profile_id}")[0]
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            statuses = list(pool.map(probe, missing))
+        self.assertEqual(set(statuses), {404}, statuses)
+        after = set(store._profile_locks)
+        self.assertEqual(after - before, set(),
+                         f"不存在的 id 不应留下锁：{sorted(after - before)[:5]}")
+
+    def test_28_head_health_matches_get(self):
+        """HEAD /api/health 与 GET 一致：200 + 相同 Content-Length，无响应体。"""
+        status, body, headers = self.request("GET", "/api/health")
+        self.assertEqual(status, 200)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            connection.request("HEAD", "/api/health")
+            response = connection.getresponse()
+            head_body = response.read()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(head_body, b"")
+            self.assertEqual(response.getheader("Content-Length"), str(len(body)))
+            self.assertIn("application/json", response.getheader("Content-Type", ""))
+        finally:
+            connection.close()
+
+    def test_29_learn_history_capped_at_200(self):
+        """learn.history 最多 200 条（丢最旧），rounds 继续累加。"""
+        kit_dir = ROOT / "kit"
+        if str(kit_dir) not in sys.path:
+            sys.path.insert(0, str(kit_dir))
+        from pptxkit import profile as profiler
+
+        profile = profiler.analyze(FIXTURE_ACADEMIC)
+        for index in range(250):
+            profiler.learn(profile, 5, notes=f"r{index}")
+        learn = profile["learn"]
+        self.assertEqual(learn["rounds"], 250)
+        self.assertEqual(len(learn["history"]), 200)
+        self.assertEqual(learn["history"][0]["notes"], "r50")
+        self.assertEqual(learn["history"][-1]["notes"], "r249")
+        self.assertAlmostEqual(profile["style"]["density"], 1.4, places=4)
+
+        store_dir = self.store_dir.parent / "history-store"
+        saved = profiler.save(profile, store_dir)
+        reloaded = profiler.load(store_dir, saved["id"])
+        self.assertEqual(len(reloaded["learn"]["history"]), 200)
+        self.assertEqual(reloaded["learn"]["rounds"], 250)
+
+    def test_30_visual_gates_trigger(self):
+        """渲染前结构闸门：越界/溢出、重叠、小字号、留白、图片拉伸各触发一次。"""
+        kit_dir = ROOT / "kit"
+        if str(kit_dir) not in sys.path:
+            sys.path.insert(0, str(kit_dir))
+        from pptxkit import inspect as kit_inspect
+
+        work = self.store_dir.parent / "visual-fixtures"
+        work.mkdir(parents=True, exist_ok=True)
+        expected = {
+            "overflow": "文字溢出",
+            "out-of-bounds": "文字越界",
+            "overlap": "元素重叠",
+            "small-font": "字号过小",
+            "blank": "留白过多",
+            "stretch": "图片拉伸",
+        }
+        for kind, issue_kind in expected.items():
+            path = build_review_deck(work / f"{kind}.pptx", kind)
+            report = kit_inspect.review(path)
+            kinds = {issue["kind"] for page in report["pages"]
+                     for issue in page["issues"]}
+            self.assertIn(issue_kind, kinds, f"{kind} 应触发 {issue_kind}，实际 {kinds}")
+            self.assertFalse(report["rendered"])
+            self.assertIn("未渲染", " ".join(report["notes"]))
+            self.assertIn("未渲染（缺少 Office/WPS）", kit_inspect.format_review(report))
+
+    def test_31_visual_render_gate_and_degrade(self):
+        """有渲染 PNG 时叠加视觉闸门；没有时明确降级为结构检查。"""
+        kit_dir = ROOT / "kit"
+        if str(kit_dir) not in sys.path:
+            sys.path.insert(0, str(kit_dir))
+        from PIL import Image
+        from pptxkit import inspect as kit_inspect
+
+        work = self.store_dir.parent / "visual-fixtures"
+        work.mkdir(parents=True, exist_ok=True)
+        deck = build_review_deck(work / "render.pptx", "render")
+
+        structural = kit_inspect.review(deck)
+        self.assertFalse(structural["rendered"])
+        self.assertIn("未渲染（缺少 Office/WPS）", kit_inspect.format_review(structural))
+
+        png_dir = work / "render-png"
+        png_dir.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (800, 450), (255, 255, 255)).save(png_dir / "slide-01.png")
+        filled = Image.new("RGB", (800, 450), (255, 255, 255))
+        for x in range(80, 500):
+            for y in range(100, 150):
+                filled.putpixel((x, y), (20, 30, 60))
+        filled.save(png_dir / "slide-02.png")
+
+        rendered = kit_inspect.review(deck, png_dir=png_dir)
+        self.assertTrue(rendered["rendered"])
+        self.assertIn("已分析 2 张渲染 PNG", " ".join(rendered["notes"]))
+        page_one = rendered["pages"][0]
+        kinds = {issue["kind"] for issue in page_one["issues"]}
+        self.assertTrue(kinds & {"留白过多", "无视觉焦点"}, kinds)
+        self.assertEqual(rendered["pages"][1]["status"], "PASS",
+                         rendered["pages"][1]["issues"])
+        output = kit_inspect.format_review(rendered)
+        self.assertIn("渲染：已分析逐页 PNG（视觉闸门生效）", output)
+        self.assertIn("汇总：PASS 1 / NEEDS_REVISION 1", output)
+
+    def test_32_visual_cli_contract(self):
+        """visual CLI：逐页 PASS/NEEDS_REVISION + 汇总；全 PASS 退出码 0。"""
+        kit_dir = ROOT / "kit"
+        if str(kit_dir) not in sys.path:
+            sys.path.insert(0, str(kit_dir))
+        from pptxkit import inspect as kit_inspect
+
+        work = self.store_dir.parent / "visual-fixtures"
+        work.mkdir(parents=True, exist_ok=True)
+        bad = build_review_deck(work / "bad-cli.pptx", "blank")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = kit_inspect.main(["--visual", str(bad)])
+        output = buffer.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn("[NEEDS_REVISION] 第 1 页", output)
+        self.assertIn("汇总：PASS 0 / NEEDS_REVISION 1", output)
+
+        good = build_review_deck(work / "good-cli.pptx", "good")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = kit_inspect.main(["--visual", str(good)])
+        output = buffer.getvalue()
+        self.assertEqual(code, 0, output)
+        self.assertIn("[PASS] 第 1 页", output)
+        self.assertIn("汇总：PASS 1 / NEEDS_REVISION 0", output)
 
 
 if __name__ == "__main__":

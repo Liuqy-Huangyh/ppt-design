@@ -9,6 +9,7 @@
     .\scripts\ppt.ps1 build .\templates\editorial-share.md -Theme editorial
     .\scripts\ppt.ps1 html  .\templates\editorial-share.md -Open
     .\scripts\ppt.ps1 qa    .\out\academic-defense.pptx
+    .\scripts\ppt.ps1 visual .\out\design-showcase.pptx     # 渲染后逐页视觉/缺陷评审
     .\scripts\ppt.ps1 render .\out\academic-defense.pptx     # 出 PDF + 每页 PNG
     .\scripts\ppt.ps1 md    .\examples\marp-demo.md -Pptx    # marp：md → 原生 pptx
     .\scripts\ppt.ps1 tomd  .\旧PPT.pptx                     # 反解成 Markdown
@@ -148,6 +149,34 @@ switch ($Command.ToLower()) {
     if (-not $Path) { throw "用法：ppt.ps1 qa <文件.pptx>" }
     Invoke-Kit -KitArgs @("qa", (Resolve-Path $Path).Path)
   }
+  "visual" {
+    # 渲染后评审：先 WPS 导 PNG，再按「视觉 / 缺陷」两条闸门逐页判 PASS / NEEDS_REVISION
+    if (-not $Path) { throw "用法：ppt.ps1 visual <文件.pptx> [-Out 输出目录] [-Width 1600]" }
+    $src = (Resolve-Path $Path).Path
+    $stem = [IO.Path]::GetFileNameWithoutExtension($src)
+    $visualDir = if ($Out) { Join-Path (Get-Location) $Out } else { Join-Path $Root "out\$stem-visual" }
+    New-Item -ItemType Directory -Force -Path $visualDir | Out-Null
+    $pngDir = Join-Path $visualDir "$stem-png"
+    $rendered = $false
+    try {
+      & (Join-Path $PSScriptRoot "render-pptx.ps1") -Path $src -OutDir $visualDir -NoPdf -Width $Width
+      if ($LASTEXITCODE -eq 0 -and (Test-Path $pngDir) -and
+          (Get-ChildItem $pngDir -Filter *.png -ErrorAction SilentlyContinue)) {
+        $rendered = $true
+      }
+    } catch {
+      Write-Host "渲染失败，降级为结构检查：$($_.Exception.Message)"
+    }
+    if (-not $rendered) {
+      Write-Host "提示：未渲染（缺少 Office/WPS 或渲染失败），仅执行结构检查。"
+    }
+    $env:PYTHONPATH = $Kit
+    $cliArgs = @("-m", "pptxkit.inspect", "--visual", $src)
+    if ($rendered) { $cliArgs += @("--png-dir", $pngDir) }
+    & $Python @cliArgs
+    $code = $LASTEXITCODE
+    if ($code -ne 0) { exit $code }
+  }
   "tomd" {
     if (-not $Path) { throw "用法：ppt.ps1 tomd <文件.pptx> [-Out 输出.md]" }
     $src = (Resolve-Path $Path).Path
@@ -201,7 +230,8 @@ PPT 工作区命令
   html    <md>       Markdown → 单文件 HTML 演示    [-Theme ...] [-Out] [-Open]
   web               启动 PPT Studio 服务（浏览器生成/案例/反馈） [-Host 0.0.0.0] [-Port 8765]
   md      <md>       Markdown → pptx/pdf/html（marp 引擎，原生形状） [-Pptx|-Pdf]
-  render  <pptx>     PPTX → PDF + 每页 PNG（走本机 PowerPoint）
+  render  <pptx>     PPTX → PDF + 每页 PNG（走本机 WPS/PowerPoint）
+  visual  <pptx>     渲染后逐页评审：视觉焦点/留白 + 越界溢出/重叠/字号/图片拉伸
   qa      <pptx>     体检：字数、溢出、字体、备注
   tomd    <pptx>     反解成 Markdown（图片导出到 media/）
   serve   [dir]      Marp 实时预览（改 md 自动刷新）
@@ -212,6 +242,7 @@ PPT 工作区命令
   .\scripts\ppt.ps1 build .\templates\academic-defense.md -Open
   .\scripts\ppt.ps1 web
   .\scripts\ppt.ps1 web -Host 0.0.0.0 -Port 8765
+  .\scripts\ppt.ps1 visual .\out\design-showcase.pptx
   .\scripts\ppt.ps1 render .\out\academic-defense.pptx
 "@
   }
