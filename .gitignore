@@ -1,0 +1,26 @@
+# 依赖与缓存
+node_modules/
+.pnpm-store/
+__pycache__/
+*.pyc
+
+# 运行产物
+out/
+.tmp/
+.tmp2/
+server/store/
+*.log
+
+# 本地资产（字体 60MB，按需用 scripts/install-fonts.py 重新下载）
+assets/fonts/
+
+# 团队/会话状态、临时任务目录
+.agent-teams/
+ppt_tasks/
+
+# 系统文件
+Thumbs.db
+desktop.ini
+
+# 外部 skill 检出（不属于本仓库）
+PPT-Design-Skill/

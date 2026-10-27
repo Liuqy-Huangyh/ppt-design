@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="PPT Studio：提交主题生成可编辑演示，上传案例提取风格档案，打分反馈让档案自动微调。">
+<meta name="theme-color" content="#F7F3EA">
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAABnUlEQVR42mNk0F/OQEvAxEBjwAKhvh9xprrRnDZ76eEDegURGth54u2Jyx+XbH/+5NUPZPGcUFkVOa63H34fufBh/9l3cHFGRoZ4b6kJxersrExEWeBuIexuIZzoK6UechRZ3NNaxMlECMJev/9VVO1lCPv/f4YFW579+v1vbq02CUEkJ8HBx82CSzbQUczXVhRZZNnOF7cefSMtDhgZ8cl6WYugiRw6/56akawgyYkm8v7Tb2pawMqC7kFRQTZqWvDi7U80ESMNPmpasPvkO2SusSafngoP1Sw4eeXj8l0v4FwuDuaZlZrEZjQ84PvPf3eefFu//9WE5Q9//f4HEZQV51jRqqutxEOpBd4F5zEDPdJdIsVfmoONiYSiAhfICZVVk+dmY2Xk5WKRFGHTkOcW5GMlpyzCBZCLisFSmo5aQJEF33/++/r9L7LIg2ffqVOjHTr//t7T70u2P//z9z+yeNW0O/eefjfV4nMwFuLnYSHfAq/883///ccU//jlT+/ShwwMDBt7DdzMhcm34Mshp9FUNHwsYBzyrWsAfluAJQSQ7YYAAAAASUVORK5CYII=">
+<title>PPT Studio · 案例驱动的演示工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#panel-generate">跳到正文</a>
+
+<header class="masthead">
+  <div class="masthead-top">
+    <p class="kicker">Issue 01 · 案例驱动 · 反馈迭代</p>
+    <p class="masthead-status" id="service-status" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span><span id="service-label">正在连接服务…</span>
+    </p>
+  </div>
+  <h1 class="masthead-title">PPT <span>Studio</span></h1>
+  <p class="masthead-lead">提交一个主题，换回一套可编辑的演示：先生成，再向你的案例靠拢，最后由你的评分把它调准。</p>
+  <nav class="masthead-nav" aria-label="页面分区">
+    <a href="#panel-generate"><span class="nav-no">01</span>生成</a>
+    <a href="#panel-cases"><span class="nav-no">02</span>案例库</a>
+    <a href="#panel-feedback"><span class="nav-no">03</span>反馈</a>
+  </nav>
+</header>
+
+<main>
+  <!-- 01 生成 ------------------------------------------------------------- -->
+  <section class="panel" id="panel-generate" aria-labelledby="h-generate">
+    <header class="panel-head">
+      <p class="panel-no">01</p>
+      <div>
+        <h2 id="h-generate">生成一份演示</h2>
+        <p class="panel-lead">标题、页数与内容来源决定骨架；风格档案决定它像谁。生成后可下载可编辑的 .pptx，也可直接在右侧预览网页版。</p>
+      </div>
+    </header>
+
+    <div class="panel-body panel-body--split">
+      <form id="deck-form" class="form" novalidate>
+        <div class="field field--wide">
+          <label for="f-title">标题</label>
+          <input id="f-title" name="title" type="text" maxlength="120" autocomplete="off" placeholder="例如：季度复盘 · 把流程做薄">
+        </div>
+        <div class="field">
+          <label for="f-subtitle">副标题</label>
+          <input id="f-subtitle" name="subtitle" type="text" maxlength="200" autocomplete="off" placeholder="可选">
+        </div>
+        <div class="field">
+          <label for="f-author">作者</label>
+          <input id="f-author" name="author" type="text" maxlength="80" autocomplete="off" placeholder="例如：李四">
+        </div>
+        <div class="field">
+          <label for="f-date">日期</label>
+          <input id="f-date" name="date" type="text" maxlength="60" autocomplete="off" placeholder="2026.10">
+        </div>
+        <div class="field">
+          <label for="f-theme">主题</label>
+          <select id="f-theme" name="theme">
+            <option value="academic">学术答辩</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="f-pages">页数</label>
+          <input id="f-pages" name="pages" type="number" min="2" max="40" step="1" value="10">
+        </div>
+        <div class="field field--wide">
+          <label for="f-profile">风格档案</label>
+          <select id="f-profile" name="profile_id">
+            <option value="">不使用档案（基础主题）</option>
+          </select>
+        </div>
+
+        <fieldset class="field field--wide">
+          <legend>内容来源</legend>
+          <div class="segmented" role="radiogroup" aria-label="内容来源">
+            <label class="segmented-item">
+              <input type="radio" id="mode-prompt" name="content-mode" value="prompt" checked>
+              <span>提示词</span>
+            </label>
+            <label class="segmented-item">
+              <input type="radio" id="mode-outline" name="content-mode" value="outline">
+              <span>大纲</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="field field--wide" id="prompt-panel">
+          <label for="f-prompt">提示词</label>
+          <textarea id="f-prompt" name="prompt" rows="4" maxlength="4000" placeholder="例如：给团队讲我们怎么把 PPT 制作自动化"></textarea>
+          <p class="hint">一句话主题即可。配置了 LLM 时会扩写成大纲，否则走离线启发式，同样能出片。</p>
+        </div>
+        <div class="field field--wide" id="outline-panel" hidden>
+          <label for="f-outline">大纲（Markdown）</label>
+          <textarea id="f-outline" name="outline" rows="8" placeholder="# 先说结论&#10;- 要点一&#10;- 要点二"></textarea>
+          <p class="hint">每页以 <code># 标题</code> 开头，要点用 <code>- </code>。填了大纲就优先用大纲。</p>
+        </div>
+
+        <button id="gen-submit" class="button button--primary button--block" type="submit">生成演示</button>
+      </form>
+
+      <aside class="output" aria-label="生成结果">
+        <div id="gen-empty" class="empty">还没有生成记录。填写左侧内容，按下「生成演示」，这里会出现页数、下载入口和网页版预览。</div>
+
+        <div id="gen-result" class="result" hidden>
+          <p class="result-kicker">最新一份</p>
+          <h3 id="gen-title" class="result-title">—</h3>
+          <p class="result-pages"><span id="gen-pages">0</span> 页 · 主题 <span id="gen-theme">—</span> · <span id="gen-llm">离线大纲</span></p>
+          <div class="result-actions">
+            <a id="gen-pptx" class="button button--primary" href="#" download>下载 .pptx</a>
+            <a id="gen-html" class="button" href="#" target="_blank" rel="noopener">网页版新标签打开</a>
+          </div>
+          <ul id="gen-notes" class="notes"></ul>
+          <figure class="preview">
+            <figcaption>网页版预览</figcaption>
+            <div class="preview-frame" id="preview-frame">
+              <iframe id="gen-preview" title="生成结果的网页版预览" width="1280" height="720" loading="lazy"></iframe>
+            </div>
+          </figure>
+          <p class="hint">想让它更像你的案例？到 <a href="#panel-feedback">03 反馈</a> 打分，档案会立刻微调。</p>
+        </div>
+
+        <p id="gen-error" class="error" role="alert" hidden></p>
+        <p id="gen-status" class="status" aria-live="polite" hidden></p>
+      </aside>
+    </div>
+  </section>
+
+  <!-- 02 案例库 ----------------------------------------------------------- -->
+  <section class="panel" id="panel-cases" aria-labelledby="h-cases">
+    <header class="panel-head">
+      <p class="panel-no">02</p>
+      <div>
+        <h2 id="h-cases">案例库</h2>
+        <p class="panel-lead">上传你自己的 .pptx，系统读取它的配色、字体与信息密度，存成风格档案；下一次生成就能向它靠拢。</p>
+      </div>
+    </header>
+
+    <div class="panel-body">
+      <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-describedby="upload-hint">
+        <input id="file-input" class="file-input" type="file" accept=".pptx,.ppt,application/vnd.openxmlformats-officedocument.presentationml.presentation">
+        <p class="dropzone-title">拖一个 .pptx 到这里，或点击选择</p>
+        <p id="upload-hint" class="hint">单文件不超过 25 MB；旧版 .ppt 请先用 PowerPoint / WPS 另存为 .pptx。</p>
+      </div>
+      <p id="upload-status" class="status" aria-live="polite" hidden></p>
+      <p id="upload-error" class="error" role="alert" hidden></p>
+
+      <div class="library-head">
+        <h3>已有档案</h3>
+        <button id="profiles-refresh" class="button button--ghost" type="button">刷新列表</button>
+      </div>
+      <div id="profile-list" class="profile-grid"></div>
+      <p id="profiles-empty" class="empty" hidden>还没有案例档案。上传一个 .pptx，第一条档案就会出现在这里。</p>
+    </div>
+  </section>
+
+  <!-- 03 反馈 ------------------------------------------------------------- -->
+  <section class="panel" id="panel-feedback" aria-labelledby="h-feedback">
+    <header class="panel-head">
+      <p class="panel-no">03</p>
+      <div>
+        <h2 id="h-feedback">给刚生成的那份打分</h2>
+        <p class="panel-lead">评分会立刻写回它套用的风格档案：内容密度与标题比例随之微调，下一次生成更接近你的预期。</p>
+      </div>
+    </header>
+
+    <div class="panel-body panel-body--split">
+      <form id="feedback-form" class="form" novalidate>
+        <div class="field field--wide">
+          <label for="fb-deck">选择 deck</label>
+          <select id="fb-deck" name="deck_id">
+            <option value="">（还没有生成记录）</option>
+          </select>
+          <p id="fb-hint" class="hint">生成一份 deck 后，就能在这里给它打分。</p>
+        </div>
+
+        <fieldset class="field field--wide">
+          <legend>评分</legend>
+          <div class="rating" id="fb-rating">
+            <label class="rating-item">
+              <input type="radio" id="fb-rating-1" name="rating" value="1">
+              <span>1 · 很不满意</span>
+            </label>
+            <label class="rating-item">
+              <input type="radio" id="fb-rating-2" name="rating" value="2">
+              <span>2 · 不太满意</span>
+            </label>
+            <label class="rating-item">
+              <input type="radio" id="fb-rating-3" name="rating" value="3">
+              <span>3 · 一般</span>
+            </label>
+            <label class="rating-item">
+              <input type="radio" id="fb-rating-4" name="rating" value="4" checked>
+              <span>4 · 满意</span>
+            </label>
+            <label class="rating-item">
+              <input type="radio" id="fb-rating-5" name="rating" value="5">
+              <span>5 · 非常满意</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="field field--wide">
+          <label for="fb-notes">备注</label>
+          <textarea id="fb-notes" name="notes" rows="3" maxlength="1000" placeholder="哪里好、哪里还差一点（可选）"></textarea>
+        </div>
+
+        <button id="fb-submit" class="button button--primary button--block" type="submit">提交反馈</button>
+      </form>
+
+      <aside class="output" aria-label="反馈结果">
+        <div id="fb-empty" class="empty">评分后会在这里显示档案的调整结果，例如「已调整：密度 0.95」。</div>
+        <div id="fb-result" class="result" hidden>
+          <p class="result-kicker">档案已更新</p>
+          <h3 id="fb-message" class="fb-message">—</h3>
+          <p id="fb-style" class="fb-style"></p>
+          <p id="fb-profile" class="hint"></p>
+        </div>
+        <p id="fb-error" class="error" role="alert" hidden></p>
+        <p id="fb-status" class="status" aria-live="polite" hidden></p>
+      </aside>
+    </div>
+  </section>
+</main>
+
+<footer class="colophon">
+  <p>PPT STUDIO · 零构建单页 · 原生 HTML / CSS / JS</p>
+  <p class="colophon-meta"><span id="service-version">v1.0.0</span> · <span id="service-mode">离线优先</span></p>
+</footer>
+
+<noscript>
+  <p class="noscript">本页需要 JavaScript：请在浏览器里启用后刷新。</p>
+</noscript>
+
+<script src="app.js" defer></script>
+</body>
+</html>

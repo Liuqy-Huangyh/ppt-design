@@ -1,0 +1,19 @@
+{
+  "name": "ppt-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地 PPT 制造车间：Markdown / HTML / 代码 → 可编辑 PPTX",
+  "type": "module",
+  "scripts": {
+    "md:pptx": "marp --pptx --allow-local-files",
+    "md:pdf": "marp --pdf --allow-local-files",
+    "md:html": "marp --html --allow-local-files",
+    "md:serve": "marp -s --allow-local-files ."
+  },
+  "devDependencies": {
+    "@marp-team/marp-cli": "^4.5.1",
+    "lucide-static": "^1.61.0",
+    "pptxgenjs": "^4.0.1",
+    "reveal.js": "^6.0.2"
+  }
+}

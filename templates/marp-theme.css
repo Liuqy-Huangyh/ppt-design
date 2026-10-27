@@ -1,0 +1,172 @@
+/* @theme wks
+ * 与 pptxkit 的 academic 主题保持同一套配色，用于 Marp（md → pptx/pdf/html）。
+ * 用法：marp slide.md --theme-set templates/marp-theme.css --theme wks --pptx
+ */
+@import 'default';
+
+section {
+  width: 1280px;
+  height: 720px;
+  padding: 64px 76px 76px;
+  background: #ffffff;
+  color: #14213d;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 24px;
+  line-height: 1.55;
+  letter-spacing: 0.2px;
+}
+
+h1, h2, h3 {
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #16233c;
+  letter-spacing: 0;
+}
+
+h1 {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 10px;
+}
+
+h1::after {
+  content: "";
+  display: block;
+  width: 64px;
+  height: 3px;
+  margin-top: 18px;
+  background: #1b3a6b;
+}
+
+h2 {
+  font-size: 26px;
+  font-weight: 600;
+  color: #1b3a6b;
+  margin-bottom: 14px;
+}
+
+ul, ol {
+  margin: 26px 0 0;
+  padding-left: 26px;
+}
+
+li {
+  margin-bottom: 14px;
+}
+
+li::marker {
+  color: #1b3a6b;
+}
+
+strong {
+  color: #1b3a6b;
+}
+
+a {
+  color: #1b3a6b;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 18px;
+  margin-top: 24px;
+}
+
+th {
+  background: #1b3a6b;
+  color: #fff;
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+
+td {
+  padding: 9px 12px;
+  border-bottom: 1px solid #d5dce8;
+}
+
+tbody tr:nth-child(even) {
+  background: #e9eef7;
+}
+
+code {
+  font-family: Consolas, monospace;
+  font-size: 0.85em;
+  background: #e9eef7;
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: #1b3a6b;
+}
+
+pre {
+  background: #14213d;
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+
+pre code {
+  background: transparent;
+  color: #e9eef7;
+  font-size: 16px;
+}
+
+blockquote {
+  border-left: 3px solid #1b3a6b;
+  padding-left: 18px;
+  color: #5c6b82;
+  font-size: 22px;
+  margin-top: 30px;
+}
+
+footer {
+  color: #5c6b82;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+}
+
+section::after {
+  color: #5c6b82;
+  font-size: 12px;
+  letter-spacing: 0.6px;
+}
+
+/* 封面与章节页 */
+section.cover, section.lead {
+  background: #14213d;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+section.cover h1, section.lead h1 {
+  color: #ffffff;
+  font-size: 52px;
+  max-width: 1000px;
+}
+
+section.cover h1::after, section.lead h1::after {
+  background: #c9a227;
+}
+
+section.cover h2, section.lead h2 {
+  color: #c9d3e6;
+  font-size: 22px;
+  font-weight: 400;
+  margin-top: 4px;
+}
+
+section.cover p, section.lead p {
+  color: #a8b6cd;
+  font-size: 16px;
+}
+
+section.cover footer, section.lead footer {
+  color: #8fa0bb;
+}
+
+/* 强调色块（用 <span class="accent">） */
+.accent {
+  color: #c9a227;
+}

@@ -1,0 +1,6 @@
+# pnpm 配置（pnpm 11 优先读这个文件）
+# hoisted：把依赖扁平化到 node_modules 根目录，marp-cli 这类 ESM 包才能正确解析
+nodeLinker: hoisted
+
+packages:
+  - .
