@@ -278,3 +278,15 @@ python scripts/install-fonts.py --check  # 查看已装
 - 四套测试：tests/test_server.py（26）、test_profile.py（39）、test_e2e.py（7）、test_web.py（29）
 - 三轮评审：F1 任意图片读取、F2 测试基线漂移、F11 档案写入非原子并发 500 —— 全部修复并复验
 - 当前字节的复验结论见 docs/复验报告.md（含 sha256 绑定），评审全文见 docs/评审结论.md
+
+## 13. 桌面应用（WinForms + WebView2）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-desktop.ps1   # 生成桌面快捷方式
+```
+
+- `bin/PPTStudio.exe`：23KB WinForms 外壳，图标编译进 exe；启动即拉起服务并等待健康，再用 WebView2 加载界面；关窗 kill 子进程
+- 依赖同目录的 `Microsoft.Web.WebView2.Core.dll` / `.WinForms.dll` / `WebView2Loader.dll`（已随仓库提供，**不要单独拷 exe**）
+- 源码 `bin/Shell.cs`；重新编译：`csc -target:winexe -win32icon:assets\icon-bmp.ico -r:... -out:bin\PPTStudio.exe bin\Shell.cs`
+- 首次运行 Windows SmartScreen 会提示"无法识别的应用"（未签名），点「更多信息 → 仍要运行」一次即可；彻底消除需代码签名证书
+- 服务端脚本版入口仍在：`scripts\launch-ppt-studio.ps1`（浏览器模式，无任何安全提示）

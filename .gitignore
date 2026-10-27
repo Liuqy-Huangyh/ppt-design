@@ -26,6 +26,9 @@ assets/fonts/
 .agent-teams/
 ppt_tasks/
 
+# NuGet 缓存（bin/ 里已带运行所需 DLL）
+vendor/
+
 # 系统文件
 Thumbs.db
 desktop.ini
