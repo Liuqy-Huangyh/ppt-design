@@ -42,29 +42,47 @@ def cmd_themes(_args) -> int:
     return 0
 
 
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+
+
 def cmd_profile(args) -> int:
-    """分析一个案例 PPT，打印（可选落盘）风格档案。"""
+    """分析一个案例（pptx / png / jpg），打印风格档案 JSON（可落盘/入库）。"""
     from . import profile as profiler
 
     src = Path(args.src)
     if not src.exists():
         raise FileNotFoundError(f"找不到文件：{src}")
-    pf = profiler.analyze(src, name=args.name or "", source=src.name)
-    theme = profiler.apply(pf, args.base_theme)
-    metrics = pf["metrics"]
-    palette = pf["palette"]
-    fonts = pf["fonts"]
-    print(f"[OK] 已分析 {src}（{metrics['slides']} 页，"
-          f"{pf['slide_size'][0]}×{pf['slide_size'][1]} in）")
-    print("  配色  " + "  ".join(f"{key}={palette[key]}" for key in
-                                 ("bg", "ink", "muted", "accent", "accent_soft", "rule")))
-    print(f"  字体  标题={fonts['title']}　正文={fonts['body']}")
-    print(f"  指标  每页字数={metrics['chars_per_slide']}　每页要点={metrics['bullets_per_slide']}　"
-          f"标题={metrics['title_pt']}pt　正文={metrics['body_pt']}pt　"
-          f"图片占比={metrics['image_ratio']:.0%}")
-    print(f"  风格  密度={pf['style']['density']}　标题比例={pf['style']['title_scale']}")
-    print(f"  主题预览  bg=#{theme.bg} ink=#{theme.ink} accent=#{theme.accent} "
-          f"标题字号={theme.title_size}pt 标题字体={theme.font_title}")
+
+    if src.suffix.lower() in IMAGE_SUFFIXES:
+        pf = profiler.analyze_image(src, name=args.name or "", source=src.name)
+        print(f"[OK] 已分析图片 {src}（版式骨架，source=image）")
+    else:
+        pf = profiler.analyze(src, name=args.name or "", source=src.name)
+        theme = profiler.apply(pf, args.base_theme)
+        metrics = pf["metrics"]
+        palette = pf["palette"]
+        fonts = pf["fonts"]
+        print(f"[OK] 已分析 {src}（{metrics['slides']} 页，"
+              f"{pf['slide_size'][0]}×{pf['slide_size'][1]} in）")
+        print("  配色  " + "  ".join(f"{key}={palette[key]}" for key in
+                                     ("bg", "ink", "muted", "accent", "accent_soft", "rule")))
+        print(f"  字体  标题={fonts['title']}　正文={fonts['body']}")
+        print(f"  指标  每页字数={metrics['chars_per_slide']}　每页要点={metrics['bullets_per_slide']}　"
+              f"标题={metrics['title_pt']}pt　正文={metrics['body_pt']}pt　"
+              f"图片占比={metrics['image_ratio']:.0%}")
+        print(f"  风格  密度={pf['style']['density']}　标题比例={pf['style']['title_scale']}")
+        print(f"  主题预览  bg=#{theme.bg} ink=#{theme.ink} accent=#{theme.accent} "
+              f"标题字号={theme.title_size}pt 标题字体={theme.font_title}")
+
+    layout = pf.get("layout") or {}
+    hints = profiler.layout_hints(pf)
+    print(f"  骨架  标题顶={layout.get('title_top_ratio')}　标题高={layout.get('title_height_ratio')}　"
+          f"边距 L/R/T/B={layout.get('margin_left_ratio')}/{layout.get('margin_right_ratio')}/"
+          f"{layout.get('margin_top_ratio')}/{layout.get('margin_bottom_ratio')}　"
+          f"图文={layout.get('image_area_ratio')}/{layout.get('text_area_ratio')}　"
+          f"{layout.get('alignment')}·{layout.get('columns')} 栏·置信 {layout.get('confidence')}")
+    print(f"  微调  标题位移={hints['title_shift']}in　左右边距位移="
+          f"{hints['margin_left']}/{hints['margin_right']}in")
 
     if args.out:
         out = Path(args.out)
@@ -75,8 +93,7 @@ def cmd_profile(args) -> int:
     if args.store:
         saved = profiler.save(pf, args.store)
         print(f"[OK] 档案已入库：{saved['id']}（{Path(args.store) / 'profiles' / (saved['id'] + '.json')}）")
-    if args.json:
-        print(json.dumps(profiler._public(pf), ensure_ascii=False, indent=2))
+    print(json.dumps(profiler._public(pf), ensure_ascii=False, indent=2))
     return 0
 
 

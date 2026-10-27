@@ -54,12 +54,15 @@ def _resolve(path: str, base: Path, asset_root: Path | None = None) -> str:
 
 def build(doc: dict, out: str | Path, *, theme: str | None = None,
           theme_obj: Theme | None = None,
+          skeleton: dict | None = None,
           base_dir: str | Path | None = None,
           asset_root: str | Path | None = None) -> Path:
     """doc = {"meta": {...}, "slides": [...]}
 
     theme_obj 优先于 theme 名：风格档案（profile.apply()）返回的 Theme 实例
     可以直接传进来，配色/字体/标题比例都从案例里带过来。
+    skeleton 是 profile.layout_hints() 的结果：只微调 cover/section/bullets/image
+    的标题纵向位置与左右边距（已限幅）；不传时输出与旧版逐像素一致。
     asset_root 是额外的图片白名单目录（CLI 用它允许模板引用工作区 assets/）。
     """
     meta = doc.get("meta") or {}
@@ -90,6 +93,9 @@ def build(doc: dict, out: str | Path, *, theme: str | None = None,
     for s in all_slides:
         if s.get("image") and s["image"].get("path"):
             s["image"]["path"] = _resolve(s["image"]["path"], base, asset_root)
+        # 版式骨架（可选）：layouts 只在 cover/section/bullets/image 里读它
+        if skeleton:
+            s["_skeleton"] = skeleton
 
     footer = meta.get("footer") or " · ".join(
         [x for x in (meta.get("author", ""), meta.get("org", "")) if x]
@@ -113,7 +119,8 @@ def build(doc: dict, out: str | Path, *, theme: str | None = None,
 
 def build_file(src: str | Path, out: str | Path | None = None, *,
                theme: str | None = None,
-               theme_obj: Theme | None = None) -> Path:
+               theme_obj: Theme | None = None,
+               skeleton: dict | None = None) -> Path:
     src = Path(src)
     if not src.exists():
         raise SystemExit(f"找不到文件：{src}")
@@ -132,5 +139,5 @@ def build_file(src: str | Path, out: str | Path | None = None, *,
     asset_root = data_dir.parent / "assets"
     if not asset_root.is_dir():
         asset_root = None
-    return build(doc, out, theme=theme, theme_obj=theme_obj, base_dir=data_dir,
-                 asset_root=asset_root)
+    return build(doc, out, theme=theme, theme_obj=theme_obj, skeleton=skeleton,
+                 base_dir=data_dir, asset_root=asset_root)

@@ -634,6 +634,461 @@ def _build_metrics(obs: dict) -> dict:
     return metrics
 
 
+# ------------------------------------------------------------------ 版式骨架
+# 10 个固定比例（页坐标 0–1）+ 来源/置信度。pptx 用形状几何测量，图片用 PIL 墨迹投影估计；
+# 生成时按 layout_hints() 只做「标题纵向位置 + 左右边距」的限幅微调。
+
+LAYOUT_KEYS = (
+    "title_top_ratio", "title_height_ratio",
+    "margin_left_ratio", "margin_right_ratio",
+    "margin_top_ratio", "margin_bottom_ratio",
+    "image_area_ratio", "text_area_ratio",
+    "alignment", "columns",
+)
+
+# 默认骨架 =「没有可学证据」时的中性值：title_top_ratio 与版式的标题基准一致，
+# 因此默认档案算出的位移恒为 0，生成结果与未接入骨架时逐像素一致。
+DEFAULT_LAYOUT = {
+    "title_top_ratio": 0.16,
+    "title_height_ratio": 0.08,
+    "margin_left_ratio": 0.075,
+    "margin_right_ratio": 0.075,
+    "margin_top_ratio": 0.06,
+    "margin_bottom_ratio": 0.06,
+    "image_area_ratio": 0.0,
+    "text_area_ratio": 0.0,
+    "alignment": "left",
+    "columns": 1,
+    "source": "default",
+    "confidence": 0.0,
+}
+
+# 版式基准（对应 layouts.py 现有坐标）：标题带顶 0.16 页高、左右边距 0.075 页宽。
+_BASELINE_TITLE_TOP = 0.16
+_BASELINE_MARGIN_X = 0.075
+_TITLE_SHIFT_LIMIT = 0.15        # ±0.15 页高
+_MARGIN_SHIFT_LIMIT = 0.10       # ±0.10 页宽
+_FOOTER_TOP = 0.88               # 页脚/页码区域，排除在内容 bbox 之外
+
+
+def _shape_rect(shape, page_w: float, page_h: float) -> dict | None:
+    """形状相对页面的矩形（0–1）；读不到尺寸时返回 None。"""
+    left = _emu_in(getattr(shape, "left", None))
+    top = _emu_in(getattr(shape, "top", None))
+    width = _emu_in(getattr(shape, "width", None))
+    height = _emu_in(getattr(shape, "height", None))
+    if left is None or top is None or width is None or height is None:
+        return None
+    if width <= 0 or height <= 0 or page_w <= 0 or page_h <= 0:
+        return None
+    l = _clamp(left / page_w, 0.0, 1.0)
+    t = _clamp(top / page_h, 0.0, 1.0)
+    r = _clamp((left + width) / page_w, 0.0, 1.0)
+    b = _clamp((top + height) / page_h, 0.0, 1.0)
+    if r <= l or b <= t:
+        return None
+    return {"left": l, "top": t, "right": r, "bottom": b,
+            "area": (r - l) * (b - t)}
+
+
+def _shape_kind(shape) -> str | None:
+    """'image' / 'text' / None。图片优先（带文字的画布不算图片）。"""
+    try:
+        shape_type = getattr(shape, "shape_type", None)
+        if shape_type is not None and getattr(shape_type, "value", shape_type) == 13:
+            return "image"
+    except Exception:
+        pass
+    try:
+        if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+            return "text"
+    except Exception:
+        pass
+    return None
+
+
+def _shape_font_size(shape) -> float:
+    sizes = []
+    try:
+        for paragraph in shape.text_frame.paragraphs:
+            for run in paragraph.runs:
+                if run.font.size:
+                    sizes.append(run.font.size.pt)
+    except Exception:
+        pass
+    return max(sizes) if sizes else 0.0
+
+
+def _paragraph_alignment(shape) -> str | None:
+    try:
+        for paragraph in shape.text_frame.paragraphs:
+            value = paragraph.alignment
+            if value is None:
+                continue
+            text = str(value)
+            if "CENTER" in text:
+                return "center"
+            if "LEFT" in text or "JUSTIFY" in text:
+                return "left"
+    except Exception:
+        pass
+    return None
+
+
+def _text_columns(rects: list[dict]) -> int:
+    """按左右文本块判断 1/2 栏：两簇不重叠、左右都有内容才算两栏。"""
+    if len(rects) < 2:
+        return 1
+    left = [r for r in rects if r["right"] <= 0.60]
+    right = [r for r in rects if r["left"] >= 0.40]
+    if not left or not right:
+        return 1
+    left_edge = max(r["right"] for r in left)
+    right_edge = min(r["left"] for r in right)
+    return 2 if left_edge <= right_edge + 0.05 else 1
+
+
+def _slide_layout_metrics(slide, page_w: float, page_h: float) -> dict | None:
+    """单页骨架：标题 bbox、内容 bbox、图文面积、栏数、对齐。"""
+    text_rects: list[dict] = []
+    image_rects: list[dict] = []
+    title_rect = None
+    title_size = -1.0
+    title_align = None
+
+    for shape in _iter_shapes(slide.shapes):
+        kind = _shape_kind(shape)
+        rect = _shape_rect(shape, page_w, page_h)
+        if kind is None or rect is None:
+            continue
+        if rect["top"] > _FOOTER_TOP:      # 页脚 / 页码
+            continue
+        if kind == "image":
+            image_rects.append(rect)
+            continue
+        text_rects.append(rect)
+        size = _shape_font_size(shape)
+        if rect["top"] < 0.60 and size > title_size:
+            title_rect, title_size, title_align = rect, size, _paragraph_alignment(shape)
+
+    content = text_rects + image_rects
+    if not content:
+        return None
+
+    if title_rect is None and text_rects:
+        title_rect = min(text_rects, key=lambda r: r["top"])
+
+    body_rects = [r for r in text_rects if r is not title_rect]
+    if not title_rect:
+        title_rect = content[0]
+
+    image_area = _clamp(sum(r["area"] for r in image_rects), 0.0, 1.0)
+    text_area = _clamp(sum(r["area"] for r in text_rects), 0.0, 1.0)
+
+    align = title_align
+    if align is None:
+        center = (title_rect["left"] + title_rect["right"]) / 2
+        span = title_rect["right"] - title_rect["left"]
+        align = "center" if abs(center - 0.5) <= 0.04 and span <= 0.8 else "left"
+
+    return {
+        "title_top_ratio": title_rect["top"],
+        "title_height_ratio": title_rect["bottom"] - title_rect["top"],
+        "margin_left_ratio": min(r["left"] for r in content),
+        "margin_right_ratio": 1.0 - max(r["right"] for r in content),
+        "margin_top_ratio": min(r["top"] for r in content),
+        "margin_bottom_ratio": 1.0 - max(r["bottom"] for r in content),
+        "image_area_ratio": image_area,
+        "text_area_ratio": text_area,
+        "alignment": align,
+        "columns": _text_columns(body_rects),
+    }
+
+
+def _median(values: list[float], default: float) -> float:
+    clean = [float(v) for v in values if v is not None]
+    if not clean:
+        return default
+    return statistics.median(clean)
+
+
+def _deck_layout(prs) -> dict:
+    """全 deck 取中位数（对齐/栏数取众数），得到版式骨架。"""
+    page_w = _emu_in(getattr(prs, "slide_width", None)) or 13.333
+    page_h = _emu_in(getattr(prs, "slide_height", None)) or 7.5
+    per_slide: list[dict] = []
+    align_votes: Counter = Counter()
+    column_votes: Counter = Counter()
+    for slide in prs.slides:
+        metrics = _slide_layout_metrics(slide, page_w, page_h)
+        if not metrics:
+            continue
+        per_slide.append(metrics)
+        align_votes[metrics["alignment"]] += 1
+        column_votes[metrics["columns"]] += 1
+
+    if not per_slide:
+        return dict(DEFAULT_LAYOUT)
+
+    layout = {}
+    for key in ("title_top_ratio", "title_height_ratio",
+                "margin_left_ratio", "margin_right_ratio",
+                "margin_top_ratio", "margin_bottom_ratio",
+                "image_area_ratio", "text_area_ratio"):
+        layout[key] = round(_clamp(_median([m[key] for m in per_slide],
+                                           DEFAULT_LAYOUT[key]), 0.0, 1.0), 3)
+    layout["alignment"] = align_votes.most_common(1)[0][0] if align_votes else "left"
+    layout["columns"] = column_votes.most_common(1)[0][0] if column_votes else 1
+    layout["source"] = "pptx"
+    layout["confidence"] = 1.0
+    return layout
+
+
+def _layout_block(layout: dict, source: str, confidence: float) -> dict:
+    """规范化 layout 块：固定 10 字段 + source/confidence。"""
+    out = dict(DEFAULT_LAYOUT)
+    if isinstance(layout, dict):
+        for key in LAYOUT_KEYS:
+            if key in layout and layout[key] is not None:
+                out[key] = layout[key]
+    out["source"] = str(source or out.get("source") or "pptx")
+    out["confidence"] = round(_clamp(float(confidence), 0.0, 1.0), 2)
+    return out
+
+
+def layout_hints(profile: dict | None) -> dict:
+    """把档案里的 layout 骨架换算成生成时可用的微调量（英寸）。
+
+    返回：
+        title_shift   标题纵向位移（已限幅 ±0.15 页高）
+        margin_left   左边距位移（±0.10 页宽）
+        margin_right  右边距位移
+        alignment / columns / source / confidence / layout：原样带出，便于调用方记录
+    无档案或默认档案时全部为 0，版式与未接入骨架时逐像素一致。
+    """
+    profile = profile if isinstance(profile, dict) else {}
+    layout = profile.get("layout") if isinstance(profile.get("layout"), dict) else {}
+    layout = _layout_block(layout, layout.get("source", "default"),
+                           layout.get("confidence", 0.0))
+
+    size = profile.get("slide_size")
+    try:
+        page_w = float(size[0]) if size else 13.333
+        page_h = float(size[1]) if size else 7.5
+    except (TypeError, ValueError, IndexError):
+        page_w, page_h = 13.333, 7.5
+
+    title_shift = _clamp((float(layout["title_top_ratio"]) - _BASELINE_TITLE_TOP) * page_h,
+                         -_TITLE_SHIFT_LIMIT * page_h, _TITLE_SHIFT_LIMIT * page_h)
+    margin_left = _clamp((float(layout["margin_left_ratio"]) - _BASELINE_MARGIN_X) * page_w,
+                         -_MARGIN_SHIFT_LIMIT * page_w, _MARGIN_SHIFT_LIMIT * page_w)
+    margin_right = _clamp((float(layout["margin_right_ratio"]) - _BASELINE_MARGIN_X) * page_w,
+                          -_MARGIN_SHIFT_LIMIT * page_w, _MARGIN_SHIFT_LIMIT * page_w)
+
+    def _round(value: float) -> float:
+        value = round(value, 3)
+        return 0.0 if abs(value) < 0.005 else value
+
+    return {
+        "title_shift": _round(title_shift),
+        "margin_left": _round(margin_left),
+        "margin_right": _round(margin_right),
+        "alignment": layout["alignment"],
+        "columns": layout["columns"],
+        "source": layout["source"],
+        "confidence": float(layout["confidence"]),
+        "layout": layout,
+    }
+
+
+
+def _image_layout(image_path: Path) -> dict:
+    """一张幻灯片图片的骨架估计（纯 PIL + numpy，不做 OCR）。
+
+    做法：
+    * 以四边中位色当背景，灰度差 > 28 记为「墨迹」；
+    * 行/列墨迹投影 → 内容 bbox → 四边留白比例；
+    * 顶部连续墨迹带 → 标题位置/高度；
+    * 16px 图块的颜色方差 + 饱和度 → 图片面积（照片/图表命中，纯色块不算）；
+    * 标题带以下列投影里最长的空档 → 1/2 栏；标题带重心 → 左对齐/居中。
+    """
+    from PIL import Image
+    import numpy as np
+
+    with Image.open(image_path) as img:
+        img = img.convert("RGB")
+        img.thumbnail((1280, 1280))
+        arr = np.asarray(img, dtype=np.float32)
+    h, w = arr.shape[:2]
+    if h < 16 or w < 16:
+        raise ValueError("图片太小")
+
+    weights = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    gray = arr @ weights
+
+    # 背景：四边 6% 区域的中位色
+    edge = max(2, int(min(h, w) * 0.06))
+    border = np.concatenate([
+        arr[:edge].reshape(-1, 3), arr[-edge:].reshape(-1, 3),
+        arr[:, :edge].reshape(-1, 3), arr[:, -edge:].reshape(-1, 3),
+    ])
+    bg_gray = float(np.median(border, axis=0) @ weights)
+    ink = np.abs(gray - bg_gray) > 28.0
+    if int(ink.sum()) < max(16, int(0.002 * h * w)):
+        return _layout_block(dict(DEFAULT_LAYOUT), "image", 0.1)
+
+    # 图片块：16px 图块的颜色方差 + 饱和度（照片/图表命中，纯色块会被低估）
+    tile = 16
+    th, tw = h // tile, w // tile
+    image_pixels = np.zeros_like(ink)
+    if th and tw:
+        a = arr[:th * tile, :tw * tile].reshape(th, tile, tw, tile, 3)
+        tile_max = a.max(axis=-1)
+        tile_min = a.min(axis=-1)
+        sat = (tile_max - tile_min) / np.maximum(1.0, tile_max)
+        # 只有「整块大多数像素都有彩色」才算图片：深色文字所在图块也有高方差/高饱和，
+        # 但彩色像素占比低（白底 + 笔画），用占比把它排除掉。
+        colorful_frac = (sat > 0.25).mean(axis=(1, 3))
+        var_t = a.var(axis=(1, 3)).mean(axis=-1)
+        mean_t = a.mean(axis=(1, 3)).mean(axis=-1)
+        image_tiles = (var_t > 260.0) & (colorful_frac > 0.45) & (mean_t > 25.0)
+        image_pixels[:th * tile, :tw * tile] = np.repeat(
+            np.repeat(image_tiles, tile, axis=0), tile, axis=1)
+    image_area = float(image_pixels.mean())
+    # 标题/栏数/对齐只看「非图片」墨迹，避免整块照片被当成标题
+    text_ink = ink & ~image_pixels
+    if int(text_ink.sum()) < max(16, int(0.0005 * h * w)):
+        text_ink = ink
+
+    # 内容 bbox（文字 + 图片）：四边留白
+    row_ink = ink.mean(axis=1)
+    col_ink = ink.mean(axis=0)
+    row_thr = max(0.003, min(0.03, float(row_ink.max()) * 0.03))
+    col_thr = max(0.003, min(0.03, float(col_ink.max()) * 0.03))
+    rows = np.where(row_ink > row_thr)[0]
+    col_candidates = np.where(col_ink > col_thr)[0]
+    # 贴边、几乎整页高的窄竖线是装饰（封面左侧色条），不算内容边距
+    def _decoration(x: int) -> bool:
+        coverage = float(ink[:, x].mean())
+        return coverage > 0.85 and (x < w * 0.03 or x >= w * 0.97)
+
+    col_idx = np.array([int(x) for x in col_candidates if not _decoration(int(x))],
+                       dtype=int)
+    if col_idx.size == 0:
+        col_idx = col_candidates
+    if rows.size == 0 or col_idx.size == 0:
+        return _layout_block(dict(DEFAULT_LAYOUT), "image", 0.15)
+    top_row, bottom_row = int(rows[0]), int(rows[-1])
+    left_col, right_col = int(col_idx[0]), int(col_idx[-1])
+
+    # 顶部标题带：在文字墨迹上按行切段（允许 ≤3% 页高的小空隙），取顶部最密集的一段
+    text_rows = text_ink.mean(axis=1)
+    threshold = max(0.01, float(text_rows.max()) * 0.25)
+    gap_limit = max(1, int(h * 0.03))
+    runs: list[tuple[int, int, float]] = []
+    start = None
+    last = None
+    gap = 0
+    for y in range(top_row, bottom_row + 1):
+        if text_rows[y] >= threshold:
+            if start is None:
+                start = y
+            last = y
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap > gap_limit:
+                runs.append((start, int(last), float(text_rows[start:last + 1].sum())))
+                start = None
+    if start is not None:
+        runs.append((start, int(last), float(text_rows[start:last + 1].sum())))
+
+    top_runs = [r for r in runs if r[0] < 0.5 * h] or runs
+    if top_runs:
+        densest = max(r[2] for r in top_runs)
+        band_start, band_end, _ = next(
+            r for r in top_runs if r[2] >= densest * 0.5)
+    else:
+        band_start, band_end = top_row, top_row
+    title_top = band_start / h
+    title_h = max(1, band_end - band_start + 1) / h
+
+    bbox_area = ((right_col - left_col + 1) / w) * ((bottom_row - top_row + 1) / h)
+    text_area = _clamp(bbox_area - image_area, 0.0, 1.0)
+
+    # 栏数：标题带以下的文字列投影里最长空档（≥6% 内容宽且两侧都有墨迹）
+    columns = 1
+    body = text_ink[band_end + 1:bottom_row + 1, left_col:right_col + 1]
+    if body.size and body.shape[0] >= 4:
+        empty = body.mean(axis=0) <= 0.01
+        best = 0
+        run = 0
+        best_end = 0
+        for x, e in enumerate(empty):
+            if e:
+                run += 1
+                if run > best:
+                    best, best_end = run, x
+            else:
+                run = 0
+        if best >= 0.06 * (right_col - left_col + 1) and 0 < best_end < len(empty) - 1:
+            columns = 2
+
+    # 对齐：标题带墨迹的左右边界是否居中且不占满
+    band_cols = np.where(text_ink[band_start:band_end + 1, :].any(axis=0))[0]
+    alignment = "left"
+    if band_cols.size >= 2:
+        b_left, b_right = int(band_cols[0]), int(band_cols[-1])
+        center = (b_left + b_right) / 2.0 / w
+        span = (b_right - b_left) / w
+        if abs(center - 0.5) <= 0.04 and span <= 0.7:
+            alignment = "center"
+
+    confidence = 0.35
+    if int(ink.sum()) > 0.01 * h * w:
+        confidence += 0.2
+    if band_end > top_row:
+        confidence += 0.2
+    if image_area > 0.01:
+        confidence += 0.1
+    if columns == 2:
+        confidence += 0.05
+
+    return _layout_block({
+        "title_top_ratio": round(title_top, 3),
+        "title_height_ratio": round(title_h, 3),
+        "margin_left_ratio": round(left_col / w, 3),
+        "margin_right_ratio": round(1 - (right_col + 1) / w, 3),
+        "margin_top_ratio": round(top_row / h, 3),
+        "margin_bottom_ratio": round(1 - (bottom_row + 1) / h, 3),
+        "image_area_ratio": round(image_area, 3),
+        "text_area_ratio": round(text_area, 3),
+        "alignment": alignment,
+        "columns": columns,
+    }, "image", min(0.9, confidence))
+
+
+def analyze_image(image_path: str | Path, *, name: str = "", source: str = "") -> dict:
+    """从一张幻灯片图片估计版式骨架（png/jpg/webp，纯 PIL，无 OCR/模型）。
+
+    返回与 analyze() 同结构的档案；只有 layout 有意义（配色/字体/密度保持默认，
+    不做文字识别）。坏图片返回默认档案，不抛异常。
+    """
+    path = Path(image_path)
+    profile = _default_profile()
+    profile["name"] = (name or path.stem or "未命名图片").strip()
+    profile["source"] = (source or path.name or "image.png").strip()
+    if path.is_file():
+        profile["_source_path"] = str(path.resolve())
+    try:
+        profile["layout"] = _image_layout(path)
+    except Exception:
+        profile["layout"] = dict(DEFAULT_LAYOUT)
+    profile["style"] = dict(DEFAULT_STYLE)
+    profile["learn"] = {"rounds": 0, "history": []}
+    return profile
+
+
 def _default_profile() -> dict:
     return {
         "id": "",
@@ -644,6 +1099,7 @@ def _default_profile() -> dict:
         "palette": dict(DEFAULT_PALETTE),
         "fonts": dict(DEFAULT_FONTS),
         "metrics": dict(DEFAULT_METRICS),
+        "layout": dict(DEFAULT_LAYOUT),
         "style": dict(DEFAULT_STYLE),
         "learn": {"rounds": 0, "history": []},
     }
@@ -678,6 +1134,7 @@ def analyze(pptx_path: str | Path, *, name: str = "", source: str = "") -> dict:
         profile["palette"] = _build_palette(obs, theme_colors)
         profile["fonts"] = _build_fonts(obs, theme_fonts)
         profile["metrics"] = _build_metrics(obs)
+        profile["layout"] = _deck_layout(prs)
     except Exception:
         # 损坏 / 加密 / 空文件：退回默认档案，但保留名字与时间
         pass
@@ -752,6 +1209,7 @@ def save(profile: dict, store_dir: str | Path) -> dict:
     pf["palette"] = {**DEFAULT_PALETTE, **(pf.get("palette") or {})}
     pf["fonts"] = {**DEFAULT_FONTS, **(pf.get("fonts") or {})}
     pf["metrics"] = {**DEFAULT_METRICS, **(pf.get("metrics") or {})}
+    pf["layout"] = {**DEFAULT_LAYOUT, **(pf.get("layout") or {})}
     pf["style"] = {**DEFAULT_STYLE, **(pf.get("style") or {})}
     learn_obj = pf.get("learn") if isinstance(pf.get("learn"), dict) else {}
     pf["learn"] = {
@@ -767,9 +1225,13 @@ def save(profile: dict, store_dir: str | Path) -> dict:
     if source_file and Path(source_file).is_file():
         case_dir = store / "cases" / pid
         case_dir.mkdir(parents=True, exist_ok=True)
+        suffix = Path(source_file).suffix.lower()
+        if suffix not in (".pptx", ".png", ".jpg", ".jpeg", ".webp", ".bmp"):
+            suffix = ".pptx"
+        target_name = f"source{suffix}"
         try:
-            shutil.copyfile(Path(source_file), case_dir / "source.pptx")
-            pf["source"] = "source.pptx"
+            shutil.copyfile(Path(source_file), case_dir / target_name)
+            pf["source"] = target_name
         except OSError:
             pass
 
@@ -793,6 +1255,7 @@ def load(store_dir: str | Path, profile_id: str) -> dict:
     data["palette"] = {**DEFAULT_PALETTE, **(data.get("palette") or {})}
     data["fonts"] = {**DEFAULT_FONTS, **(data.get("fonts") or {})}
     data["metrics"] = {**DEFAULT_METRICS, **(data.get("metrics") or {})}
+    data["layout"] = {**DEFAULT_LAYOUT, **(data.get("layout") or {})}
     data["style"] = {**DEFAULT_STYLE, **(data.get("style") or {})}
     if not isinstance(data.get("learn"), dict):
         data["learn"] = {"rounds": 0, "history": []}
@@ -816,6 +1279,7 @@ def list_all(store_dir: str | Path) -> list[dict]:
             data["palette"] = {**DEFAULT_PALETTE, **(data.get("palette") or {})}
             data["fonts"] = {**DEFAULT_FONTS, **(data.get("fonts") or {})}
             data["metrics"] = {**DEFAULT_METRICS, **(data.get("metrics") or {})}
+            data["layout"] = {**DEFAULT_LAYOUT, **(data.get("layout") or {})}
             data["style"] = {**DEFAULT_STYLE, **(data.get("style") or {})}
             out.append(data)
         except (OSError, ValueError):

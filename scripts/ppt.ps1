@@ -184,6 +184,14 @@ switch ($Command.ToLower()) {
     Invoke-Kit -KitArgs @("to-md", $src, "-o", $target)
   }
   "themes" { Invoke-Kit -KitArgs @("themes") }
+  "profile" {
+    # 案例风格档案：pptx 读几何/配色/字体，png|jpg 只读版式骨架；打印档案 JSON
+    if (-not $Path) { throw "用法：ppt.ps1 profile <文件.pptx|.png|.jpg> [-Out 输出.json]" }
+    $src = (Resolve-Path $Path).Path
+    $a = @("profile", $src)
+    if ($Out) { $a += @("-o", (Join-Path (Get-Location) $Out)) }
+    Invoke-Kit -KitArgs $a
+  }
   "render" {
     if (-not $Path) { throw "用法：ppt.ps1 render <文件.pptx> [-NoPng] [-Width 1920]" }
     $src = (Resolve-Path $Path).Path

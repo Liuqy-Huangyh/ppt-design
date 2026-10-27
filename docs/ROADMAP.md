@@ -106,3 +106,62 @@ Phase 1（T1–T5）落地后，Phase 2 按 `P0-1 → P0-3 → P0-2 → P0-4` �
 
 **下一步（未做）**：把 `design.py` 的网格/字号/配色接进 `layouts.py`，重做 cover/section/stats/quote/timeline 五个版式；
 给 `html_deck.build()` 加 `theme_obj`（svc 已提出，属于 T1 遗留缺口）。
+
+---
+
+## 7. 版式骨架（`profile.layout`）已落地（t15）
+
+`profile.analyze()` 现在除了配色/字体/密度，还输出一个 `layout` 块（10 个比例 + `source` / `confidence`）；
+`profile.analyze_image()` 可以从一张幻灯片图片（png/jpg/webp）用纯 PIL + numpy 估计同一结构；
+`builder.build(..., skeleton=profile.layout_hints(pf))` 会让 cover / section / bullets / image 四个版式
+按骨架微调标题纵向位置与左右边距（限幅）。不传 `skeleton` 时输出与旧版**逐字节一致**
+（已用 17 页 academic deck 对比全部 slide XML 验证）。
+
+### 7.1 字段含义（坐标均为相对页面的 0–1 比例）
+
+| 字段 | 含义 | 测量方式（pptx） | 估计方式（图片） |
+|---|---|---|---|
+| `title_top_ratio` | 标题框上沿 | 文字形状里字号最大者（top < 0.6）的 `top/H`，全 deck 中位数 | 顶部最密集文字带的上沿 |
+| `title_height_ratio` | 标题框高度 | 同上的 `(bottom-top)/H` | 该文字带的高度 |
+| `margin_left_ratio` | 内容左边距 | 所有文字/图片形状（排除页脚）的 `min(left)/W` | 墨迹 bbox 左边界 / 宽 |
+| `margin_right_ratio` | 内容右边距 | `1 - max(right)/W` | `1 - 墨迹 bbox 右边界 / 宽` |
+| `margin_top_ratio` | 内容上边距 | `min(top)/H` | 墨迹 bbox 上边界 / 高 |
+| `margin_bottom_ratio` | 内容下边距 | `1 - max(bottom)/H` | `1 - 墨迹 bbox 下边界 / 高` |
+| `image_area_ratio` | 图片面积占比 | 图片形状（`shape_type == PICTURE`）面积和 | 16px 图块中「颜色方差 > 260 且彩色像素占比 > 45%」的占比 |
+| `text_area_ratio` | 文字面积占比 | 文字形状面积和（可能重叠，故封顶 1.0） | 内容 bbox 面积 − 图片面积 |
+| `alignment` | 左对齐 / 居中 | 标题段落的 `alignment`，取不到时看标题框中心是否在 0.5 ± 0.04 | 标题带墨迹左右边界是否居中且宽度 ≤ 0.7 页宽 |
+| `columns` | 1 栏 / 2 栏 | 正文文字框左右两簇不重叠 → 2 | 标题带以下列投影的最长空档 ≥ 6% 内容宽 → 2 |
+| `source` | `pptx` / `image` / `default` | — | — |
+| `confidence` | 0–1 | pptx 固定 1.0 | 由墨迹量/标题带/图片块/栏数命中累加，上限 0.9 |
+
+数值取全 deck 的**中位数**（对齐/栏数取众数）；页脚（top > 0.88）与无文字的形状不参与统计。
+
+### 7.2 生成时怎么用
+
+```python
+profile = pptxkit.profile.analyze("案例.pptx")        # 或 analyze_image("slide.png")
+key = pptxkit.profile.apply(profile, "academic")      # 配色/字体（原有能力）
+hints = pptxkit.profile.layout_hints(profile)         # 骨架 → 微调量
+builder.build(doc, "out.pptx", theme_obj=key, skeleton=hints)
+```
+
+`layout_hints()` 返回 `title_shift`（英寸，限幅 ±0.15 页高）、`margin_left` / `margin_right`
+（限幅 ±0.10 页宽）以及原始 `layout` / `source` / `confidence`。各版式内部还有安全区间
+（例如正文页标题带限制在 0.55–2.20in），避免极端案例把标题推到页脚或压住 kicker。
+默认档案 / 无档案时三个位移都是 0，版式走原分支，输出与旧版逐字节一致。
+
+### 7.3 误判边界（请按“估计”使用，不要当精确测量）
+
+- **不做文字识别**：图片分析没有 OCR、没有任何模型，只给比例；文字内容、字号、字体一律拿不到。
+- **图片面积**只看「色方差大 + 彩色像素多」的块：纯色色块、低饱和图表、黑白照片会被低估；大面积渐变可能被高估。
+- **墨迹阈值**固定为「与四边中位色的灰度差 > 28」：白底白字、浅色文字/细线会漏检；深色底整体按绝对差处理。
+- **标题带**取「顶部 50% 内最密的一段文字墨迹」，小字号 kicker 与主标题相邻时可能合并；居中判断基于标题带墨迹中心 ±0.04 页宽，块状标题容易被判成居中。
+- **栏数**只输出 1 或 2：三栏/多栏、卡片网格、时间线都可能被判成 2；有通栏正文时可能被判成 1。
+- **页脚/装饰**：pptx 侧用 `top > 0.88` 排除页脚；图片侧用「贴边、几乎整页高的窄竖线」排除装饰色条，其余装饰（角标、页码）仍会进入 bbox。
+- **比例精度**：pptx 侧是形状 bbox（不是文字墨迹），同一段文字换行后 bbox 变高，`title_height_ratio` 会随之变化；图片侧分辨率与抗锯齿会影响 ±0.01–0.03。
+- 图片分析的 `palette` / `fonts` / `metrics` 保持默认值——**只有 layout 有意义**。
+
+### 7.4 验证
+
+- `tests/test_layout_profile.py`（16 项）：合成 pptx（标题 0.12 页高、边距 0.08 页宽、左右两栏）与合成图（白底 + 标题条 + 高方差图片块 + 双栏图）的断言；骨架限幅；默认档案/无档案构建的逐字节一致；CLI `profile` 对 pptx 与 png 都输出 JSON。
+- 既有四套测试（test_profile 39 / test_e2e 7 / test_server 32 / test_web 29）全绿；`ppt.cmd build templates/academic-defense.md` 页数不变（17 页）、qa 无新增告警。
